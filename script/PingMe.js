@@ -1,4 +1,4 @@
-//2026/04/21  Shadowrocket 移植版
+//2026/04/21  Shadowrocket 移植版（已修复 SyntaxError）
 /*
 @Name：PingMe 自动化签到+视频奖励（Shadowrocket）
 @Author：怎么肥事  移植：Claude
@@ -156,10 +156,7 @@ function buildHeaders(capture) {
 
 // ─── 平台适配层（Shadowrocket） ──────────────────────────────────────────────
 
-/**
- * 将 Shadowrocket 回调式 $httpClient.get 包装为 Promise
- * 返回值格式与原 $task.fetch 保持一致：{ body: string }
- */
+// 将回调式 $httpClient.get 包装为 Promise，返回 { body: string }
 function httpGet(url, headers) {
   return new Promise((resolve, reject) => {
     $httpClient.get({ url, headers }, (error, _response, data) => {
@@ -169,114 +166,116 @@ function httpGet(url, headers) {
   });
 }
 
-/** 通知：$notification.post 替换 $notify */
+// $notification.post 替换 $notify
 function notifyDone(title, body) {
   $notification.post(scriptName, title, body);
 }
 
 // ─── 入口：抓包模式 vs 定时任务模式 ─────────────────────────────────────────
+// 【修复说明】
+// Shadowrocket 不像 QuantumultX 会将脚本包裹在隐式函数中，
+// 顶层裸 return 会引发 SyntaxError: Return statements are only valid inside functions
+// 解决方案：用 if(capture) 分支替代原版的裸 return，彻底消除顶层 return。
+
 if (typeof $request !== 'undefined' && $request) {
-  // ── 抓包模式：拦截 queryBalanceAndBonus 请求，提取并保存账号信息 ──
+  // ── 抓包模式 ──
   const capture = {
     url: $request.url,
     paramsRaw: parseRawQuery($request.url),
     headers: normalizeHeaderNameMap($request.headers || {})
   };
-
-  // $persistentStore.write 替换 $prefs.setValueForKey
   $persistentStore.write(JSON.stringify(capture), ckKey);
-
   notifyDone('✅ 参数抓取成功', '已保存请求头+参数');
   console.log(`【${scriptName}】capture:\n${JSON.stringify(capture, null, 2)}`);
   $done({});
 
 } else {
-  // ── 定时任务模式：执行签到+视频 ──
-
-  // $persistentStore.read 替换 $prefs.valueForKey
+  // ── 定时任务模式 ──
   const raw = $persistentStore.read(ckKey);
 
   if (!raw) {
     notifyDone('⚠️ 未抓到参数', '先打开 PingMe 触发一次');
     $done();
   } else {
-    let capture;
+    let capture = null;
     try {
       capture = JSON.parse(raw);
     } catch (e) {
       notifyDone('⚠️ 参数损坏', '请重新打开 PingMe 抓参');
       $done();
-      return;
     }
 
-    const headers = buildHeaders(capture);
-    const msgs = [];
+    // 用 if(capture) 代替原版裸 return，避免 Shadowrocket SyntaxError
+    if (capture) {
+      const headers = buildHeaders(capture);
+      const msgs = [];
 
-    function fetchApi(path) {
-      return httpGet(buildUrl(path, capture), headers);
-    }
+      function fetchApi(path) {
+        return httpGet(buildUrl(path, capture), headers);
+      }
 
-    function doVideoLoop(count) {
-      let i = 0;
-      function next() {
-        if (i >= count) return Promise.resolve();
-        return new Promise(resolve => {
-          setTimeout(() => {
-            i++;
-            fetchApi('videoBonus').then(res => {
-              try {
-                const d = JSON.parse(res.body);
-                if (d.retcode === 0) {
-                  msgs.push(`🎬 视频${i}：+${d.result?.bonus || '?'} Coins`);
-                  resolve(next());
-                } else {
-                  msgs.push(`⏸ 视频${i}：${d.retmsg}`);
+      function doVideoLoop(count) {
+        let i = 0;
+        function next() {
+          if (i >= count) return Promise.resolve();
+          return new Promise(resolve => {
+            setTimeout(() => {
+              i++;
+              fetchApi('videoBonus').then(res => {
+                try {
+                  const d = JSON.parse(res.body);
+                  if (d.retcode === 0) {
+                    msgs.push(`🎬 视频${i}：+${d.result?.bonus || '?'} Coins`);
+                    resolve(next());
+                  } else {
+                    msgs.push(`⏸ 视频${i}：${d.retmsg}`);
+                    resolve();
+                  }
+                } catch (e) {
+                  msgs.push(`❌ 视频${i}：解析失败`);
                   resolve();
                 }
-              } catch (e) {
-                msgs.push(`❌ 视频${i}：解析失败`);
+              }).catch(err => {
+                msgs.push(`❌ 视频${i}：${err.error || '请求失败'}`);
                 resolve();
-              }
-            }).catch(err => {
-              msgs.push(`❌ 视频${i}：${err.error || '请求失败'}`);
-              resolve();
-            });
-          }, i === 0 ? 1500 : VIDEO_DELAY);
-        });
+              });
+            }, i === 0 ? 1500 : VIDEO_DELAY);
+          });
+        }
+        return next();
       }
-      return next();
-    }
 
-    fetchApi('queryBalanceAndBonus').then(res => {
-      try {
-        const d = JSON.parse(res.body);
-        if (d.retcode === 0) msgs.push(`💰 余额：${d.result.balance} Coins`);
-        else msgs.push(`⚠️ 查询：${d.retmsg}`);
-      } catch (e) {
-        msgs.push('❌ 查询：解析失败');
-      }
-      return fetchApi('checkIn');
-    }).then(res => {
-      try {
-        const d = JSON.parse(res.body);
-        if (d.retcode === 0) msgs.push(`✅ 签到：${(d.result?.bonusHint || d.retmsg || '').replace(/\n/g, ' ')}`);
-        else msgs.push(`⚠️ 签到：${d.retmsg}`);
-      } catch (e) {
-        msgs.push('❌ 签到：解析失败');
-      }
-      return doVideoLoop(MAX_VIDEO);
-    }).then(() => {
-      return fetchApi('queryBalanceAndBonus');
-    }).then(res => {
-      try {
-        const d = JSON.parse(res.body);
-        if (d.retcode === 0) msgs.push(`💰 最新余额：${d.result.balance} Coins`);
-      } catch (e) {}
-      notifyDone('🎉 任务完成', msgs.join('\n'));
-      $done();
-    }).catch(err => {
-      notifyDone('❌ 任务失败', msgs.join('\n') + '\n' + (err.error || String(err)));
-      $done();
-    });
+      fetchApi('queryBalanceAndBonus').then(res => {
+        try {
+          const d = JSON.parse(res.body);
+          if (d.retcode === 0) msgs.push(`💰 余额：${d.result.balance} Coins`);
+          else msgs.push(`⚠️ 查询：${d.retmsg}`);
+        } catch (e) {
+          msgs.push('❌ 查询：解析失败');
+        }
+        return fetchApi('checkIn');
+      }).then(res => {
+        try {
+          const d = JSON.parse(res.body);
+          if (d.retcode === 0) msgs.push(`✅ 签到：${(d.result?.bonusHint || d.retmsg || '').replace(/\n/g, ' ')}`);
+          else msgs.push(`⚠️ 签到：${d.retmsg}`);
+        } catch (e) {
+          msgs.push('❌ 签到：解析失败');
+        }
+        return doVideoLoop(MAX_VIDEO);
+      }).then(() => {
+        return fetchApi('queryBalanceAndBonus');
+      }).then(res => {
+        try {
+          const d = JSON.parse(res.body);
+          if (d.retcode === 0) msgs.push(`💰 最新余额：${d.result.balance} Coins`);
+        } catch (e) {}
+        notifyDone('🎉 任务完成', msgs.join('\n'));
+        $done();
+      }).catch(err => {
+        notifyDone('❌ 任务失败', msgs.join('\n') + '\n' + (err.error || String(err)));
+        $done();
+      });
+    }
   }
 }
