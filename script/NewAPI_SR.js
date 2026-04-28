@@ -48,8 +48,6 @@ if (typeof $task === 'undefined') {
 }
 /* ===== 垫片结束 ===== */
 
-
-/* ===== 以下是原始 NewAPI.js 原文，不做任何改动 ===== */
 const HEADER_KEY_PREFIX = "UniversalCheckin_Headers";
 const HOSTS_LIST_KEY = "UniversalCheckin_HostsList";
 const isGetHeader = typeof $request !== "undefined";
@@ -64,6 +62,7 @@ const NEED_KEYS = [
   "Referer",
   "Cookie",
   "new-api-user",
+  "Content-Type" // 修复：新增抓取 Content-Type
 ];
 
 function safeJsonParse(str) {
@@ -207,58 +206,89 @@ if (isGetHeader) {
     $done();
   }
 
-  const doCheckin = (host, account = "") => {
+  const doCheckin = async (host, account = "") => {
     const key = headerKeyForHost(host, account);
     const raw = $prefs.valueForKey(key);
+    const title = notifyTitleForHost(host, account);
+    
     if (!raw) {
-      $notify(notifyTitleForHost(host, account), "缺少参数", "请先抓包保存一次 /api/user/self 的请求头。");
-      return Promise.resolve();
+      $notify(title, "缺少参数", "请先抓包保存一次 /api/user/self 的请求头。");
+      return;
     }
     const savedHeaders = safeJsonParse(raw);
     if (!savedHeaders) {
-      $notify(notifyTitleForHost(host, account), "参数异常", "已保存的请求头解析失败，请重新抓包保存。");
-      return Promise.resolve();
+      $notify(title, "参数异常", "已保存的请求头解析失败，请重新抓包保存。");
+      return;
     }
-    const url = `https://${host}/api/user/checkin`;
+    
+    // 修复点 1：移除强制 Host 注入，防止 SNI 冲突引发 Example Domain 错误；加入 Content-Type 声明
     const headers = {
-      Host: savedHeaders.Host || host,
       Accept: savedHeaders.Accept || "application/json, text/plain, */*",
       "Accept-Language": savedHeaders["Accept-Language"] || "zh-CN,zh-Hans;q=0.9",
       "Accept-Encoding": savedHeaders["Accept-Encoding"] || "gzip, deflate, br",
       Origin: savedHeaders.Origin || originFromHost(host),
       Referer: savedHeaders.Referer || refererFromHost(host),
-      "User-Agent": savedHeaders["User-Agent"] || "Shadowrocket",
+      "User-Agent": savedHeaders["User-Agent"] || "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15",
       Cookie: savedHeaders.Cookie || "",
       "new-api-user": savedHeaders["new-api-user"] || "",
+      "Content-Type": savedHeaders["Content-Type"] || "application/json",
     };
-    return $task.fetch({ url, method: "POST", headers, body: "" }).then(
-      (resp) => {
-        const status = resp.statusCode;
-        const obj = safeJsonParse(resp.body || "") || {};
-        const success = Boolean(obj.success);
-        const message = obj.message ? String(obj.message) : "";
-        const checkinDate = obj?.data?.checkin_date ? String(obj.data.checkin_date) : "";
-        const quotaAwarded = obj?.data?.quota_awarded !== undefined ? String(obj.data.quota_awarded) : "";
-        const title = notifyTitleForHost(host, account);
-        if (status === 401 || status === 403) {
-          $notify(title, "登录失效", `HTTP ${status}，请重新抓包保存 Cookie。`);
-        } else if (status >= 200 && status < 300) {
-          if (success) {
-            let content = checkinDate ? `日期：${checkinDate}` : "签到成功";
-            if (quotaAwarded) content += `\n获得：${quotaAwarded}`;
-            $notify(title, "签到成功", content);
-          } else {
-            $notify(title, "签到失败", message || resp.body || `HTTP ${status}`);
-          }
-        } else {
-          $notify(title, `接口异常 ${status}`, message || resp.body);
+
+    // 封装请求方法
+    const sendRequest = (path) => {
+      return $task.fetch({ 
+        url: `https://${host}${path}`, 
+        method: "POST", 
+        headers: headers, 
+        body: "{}"  // 修复点 2：传入 {} 空 JSON 而非空字符串，避免 Gin 框架拦截
+      });
+    };
+
+    try {
+      let resp = await sendRequest("/api/user/checkin");
+      let obj = safeJsonParse(resp.body || "") || {};
+
+      // 修复点 3：遇到 Invalid URL 时，自动尝试部分面板使用的 /api/user/sign 接口
+      if (resp.statusCode === 404 || (obj.error && obj.error.message && obj.error.message.includes("Invalid URL"))) {
+        console.log(`[NewAPI] ${title} /api/user/checkin 失败，尝试回退接口 /api/user/sign`);
+        const fallbackResp = await sendRequest("/api/user/sign");
+        if (fallbackResp.statusCode !== 404) {
+          resp = fallbackResp;
+          obj = safeJsonParse(resp.body || "") || {};
         }
-      },
-      (reason) => {
-        const err = reason?.error ? String(reason.error) : String(reason || "");
-        $notify(notifyTitleForHost(host, account), "网络错误", err);
       }
-    );
+
+      const status = resp.statusCode;
+      const success = Boolean(obj.success);
+      const message = obj.message ? String(obj.message) : (obj.error && obj.error.message ? String(obj.error.message) : "");
+      const checkinDate = obj?.data?.checkin_date ? String(obj.data.checkin_date) : "";
+      const quotaAwarded = obj?.data?.quota_awarded !== undefined ? String(obj.data.quota_awarded) : "";
+      
+      // 修复点 4：拦截代理/网络抽风返回的 HTML 内容，避免占满屏幕
+      let rawBody = resp.body || "";
+      if (rawBody.toLowerCase().includes("<!doctype html>") || rawBody.toLowerCase().includes("<html")) {
+          rawBody = "返回了意外的网页(代理拦截或CDN异常)，请检查节点连通性。";
+      } else if (rawBody.length > 150) {
+          rawBody = rawBody.substring(0, 150) + "...";
+      }
+
+      if (status === 401 || status === 403) {
+        $notify(title, "登录失效", `HTTP ${status}，请重新抓包保存 Cookie。`);
+      } else if (status >= 200 && status < 300) {
+        if (success) {
+          let content = checkinDate ? `日期：${checkinDate}` : "签到成功";
+          if (quotaAwarded) content += `\n获得：${quotaAwarded}`;
+          $notify(title, "签到成功", content);
+        } else {
+          $notify(title, "签到失败", message || rawBody || `HTTP ${status}`);
+        }
+      } else {
+        $notify(title, `接口异常 ${status}`, message || rawBody);
+      }
+    } catch (reason) {
+      const err = reason?.error ? String(reason.error) : String(reason || "");
+      $notify(title, "网络错误", err);
+    }
   };
 
   (async () => {
