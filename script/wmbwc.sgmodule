@@ -2,7 +2,7 @@
 #!desc = 抓取token并每日签到
 
 [Script]
-歪麦获取Token = type=http-response, pattern=^https:\/\/wmapp-api\.waimaimingtang\.com\/api\/api\/v2\/user\/api_user_info_one, requires-body=true, max-size=0, script-path=https://gist.githubusercontent.com/Sliverkiss/49a9ffb2169a2becc33bf4fdbf6eb99a/raw/wmbwc.js, tag=歪麦霸王餐
+歪麦获取Token = type=http-request, pattern=^https:\/\/wmapp-api\.waimaimingtang\.com\/api\/api\/v2\/user\/api_user_info_one, requires-body=true, max-size=0, script-path=https://gist.githubusercontent.com/Sliverkiss/49a9ffb2169a2becc33bf4fdbf6eb99a/raw/wmbwc.js, tag=歪麦霸王餐
 歪麦定时签到 = type=cron, cronexp="30 8 * * *", script-path=https://gist.githubusercontent.com/Sliverkiss/49a9ffb2169a2becc33bf4fdbf6eb99a/raw/wmbwc.js, timeout=30, tag=歪麦霸王餐
 
 [MITM]
