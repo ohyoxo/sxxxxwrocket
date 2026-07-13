@@ -10,5 +10,5 @@ hostname = %APPEND% shop-api.retail.mi.com
 # 获取 Cookie（进入小米商城相关页面即可触发）
 小米抽奖 Cookie = type=http-request,pattern=^https:\/\/shop-api\.retail\.mi\.com\/mtop\/navi\/venue\/batch,requires-body=true,max-size=0,script-path=https://raw.githubusercontent.com/MaYIHEI/paperclip/refs/heads/main/app/milottery/milottery.js
 
-# 每天 08:30 自动签到
-小米抽奖签到 = type=cron,cronexp=30 8 * * *,timeout=240,script-path=https://raw.githubusercontent.com/MaYIHEI/paperclip/refs/heads/main/app/milottery/milottery.js
+# 每天 11:30 自动签到
+小米抽奖签到 = type=cron,cronexp=30 11 * * *,timeout=240,script-path=https://raw.githubusercontent.com/MaYIHEI/paperclip/refs/heads/main/app/milottery/milottery.js
