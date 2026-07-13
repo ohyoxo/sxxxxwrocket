@@ -1,0 +1,14 @@
+#!name=小米抽奖
+#!desc=小米商城抽奖签到（Cookie获取 + 定时签到）
+#!author=ChatGPT
+#!homepage=https://github.com/MaYIHEI/paperclip
+
+[MITM]
+hostname = %APPEND% shop-api.retail.mi.com
+
+[Script]
+# 获取 Cookie（进入小米商城相关页面即可触发）
+小米抽奖 Cookie = type=http-request,pattern=^https:\/\/shop-api\.retail\.mi\.com\/mtop\/navi\/venue\/batch,requires-body=true,max-size=0,script-path=https://raw.githubusercontent.com/MaYIHEI/paperclip/refs/heads/main/app/milottery/milottery.js
+
+# 每天 08:30 自动签到
+小米抽奖签到 = type=cron,cronexp=30 8 * * *,timeout=240,script-path=https://raw.githubusercontent.com/MaYIHEI/paperclip/refs/heads/main/app/milottery/milottery.js
